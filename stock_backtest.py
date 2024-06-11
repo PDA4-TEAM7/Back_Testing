@@ -24,7 +24,6 @@ elif platform.system() == 'Linux': #리눅스
 plt.rcParams['axes.unicode_minus'] = False #한글 폰트 사용시 마이너스 폰트 깨짐 해결
 
 
-
 # 종목코드별 상장일
 def get_stock_origintime(code): 
     """ 
@@ -157,7 +156,25 @@ def get_ratio(names, prices, ratios):
 
 def get_month_end_data(df):
     df.index = pd.to_datetime(df.index)  # 인덱스를 DatetimeIndex로 변환
-    return df.resample('ME').last()     #처음에 'M(Month)'로 했는데 ME로 하래
+    return df.resample('ME').last()
+
+def calculate_sharpe_ratio_and_std(df, risk_free_rate=0.01):
+    df.index = pd.to_datetime(df.index)  # 인덱스를 DatetimeIndex로 변환
+    df['daily_return'] = df['backtest'].pct_change()
+    
+    # 누적 수익률 계산
+    cumulative_return = df['backtest'].iloc[-1] / df['backtest'].iloc[0] - 1
+    
+    # 연간 수익률 계산
+    total_period_years = (df.index[-1] - df.index[0]).days / 365.25
+    annual_return = (1 + cumulative_return) ** (1 / total_period_years) - 1
+    
+    # 연간 표준편차 계산
+    annual_std_dev = df['daily_return'].std()
+    
+    # 샤프 비율 계산
+    sharpe_ratio = (annual_return - risk_free_rate) / annual_std_dev
+    return sharpe_ratio, annual_std_dev, annual_return
 
 def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str, stock_list, start_from_latest_stock: str):
 
@@ -207,6 +224,11 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
     df.columns = stock_name
     df.fillna(0, inplace=True)
 
+    # 모든 주식이 상장된 이후의 날짜를 기준으로 필터링
+    if start_from_latest_stock == "true":
+        latest_start_date = max(pd.to_datetime([get_stock_origintime(code) for code in stock_code]))
+        df = df[df.index >= latest_start_date]
+
     # 리밸런싱 날짜 리스트 저장
     rebalanceing_date_list = []
     while start_date <= df.index[-1]:
@@ -214,7 +236,7 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
         while temp_date not in df.index and temp_date < df.index[-1]:
             temp_date += timedelta(days=1)  # 영업일이 아닐 경우 1일씩 증가.
         rebalanceing_date_list.append(temp_date)
-        start_date += relativedelta(months=1)  # interval 개월씩 증가.
+        start_date += relativedelta(months=interval)  # interval 개월씩 증가.
 
 
     backtest_index = []
@@ -229,7 +251,7 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
     for each in df.index:
         rebalnace_day = False
         if date_idx < len(rebalanceing_date_list) and each == rebalanceing_date_list[date_idx] and interval > 0:
-            if (date_idx)%interval == 0:
+            if (date_idx) % interval == 0:
                 rebalnace_day = True
             date_idx += 1
 
@@ -284,9 +306,18 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
 
     final_df.index = final_df.index.astype(str)
     final_df_dict = final_df.to_dict()
-    return final_df, final_df_dict
 
-def back_test(stock_info):
+    # 샤프 비율, 표준편차, 연간 수익률 계산
+    sharpe_ratio, annual_std_dev, annual_return = calculate_sharpe_ratio_and_std(final_df)
+
+    # 결과 출력
+    print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+    print(f"Standard Deviation: {annual_std_dev:.2f}")
+    print(f"Annual Return: {annual_return:.2%}")
+
+    return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return
+
+def back_test(stock_info):  
     portfolio = stock_info['portfolio']
     start_from_latest_stock = stock_info['start_from_latest_stock']
 
@@ -297,9 +328,9 @@ def back_test(stock_info):
     end_date = portfolio['end_date']
 
     # back_test_portfolio 호출 시 인자가 누락된 오류 수정
-    final_df, final_df_dict = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
+    final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
     
-    result = {'portfolio': final_df_dict}
+    result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return}
     
     bbox = dict( 
         boxstyle='square',
@@ -346,9 +377,9 @@ client_json_data = {
             ["381180", "TIGER 미국필라델피아반도체나스닥", 0.25]
         ],
         "balance": 1000000,
-        "interval_month": 1,        #리밸런싱할 기간. 1달마다 다시 0.25퍼가 되도록 매수 매도를 진행
-        "start_date": "20140101",
-        "end_date": "20241231"
+        "interval_month": 12,        #리밸런싱할 기간. 1달마다 다시 0.25퍼가 되도록 매수 매도를 진행
+        "start_date": "20200101",
+        "end_date": "20221231"
     }
 }
 

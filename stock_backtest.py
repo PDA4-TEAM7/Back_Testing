@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -12,41 +12,51 @@ app = Flask(__name__)
 @app.route('/backtest', methods=['POST'])
 def backtest():
     data = request.json
-    result = back_test(data)
-    return jsonify(result)
+    try:
+        result = back_test(data)
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 def get_stock_origintime(code):
-    stock_data = []
-    url = "https://fchart.stock.naver.com/sise.nhn?symbol={}&timeframe=day&count=1&requestType=0".format(code)
-    html = requests.get(url).text
-    soup = BeautifulSoup(html, "xml")
-    origintime = soup.select_one("chartdata")['origintime']
-    return origintime
+    try:
+        url = "https://fchart.stock.naver.com/sise.nhn?symbol={}&timeframe=day&count=1&requestType=0".format(code)
+        html = requests.get(url).text
+        soup = BeautifulSoup(html, "xml")
+        origintime = soup.select_one("chartdata")['origintime']
+        return origintime
+    except Exception:
+        raise ValueError(f"Stock code {code} not found")
 
 def get_stock_data(code, from_date, to_date):
-    from_date = str(from_date)
-    to_date = str(to_date)
-    count = (datetime.today() - datetime.strptime(from_date, "%Y%m%d")).days + 1
+    try:
+        from_date = str(from_date)
+        to_date = str(to_date)
+        count = (datetime.today() - datetime.strptime(from_date, "%Y%m%d")).days + 1
 
-    stock_data = []
-    url = "https://fchart.stock.naver.com/sise.nhn?symbol={}&timeframe=day&count={}&requestType=0".format(code, count)
-    html = requests.get(url).text
-    soup = BeautifulSoup(html, "xml")
-    data = soup.findAll('item')
-    for row in data:
-        daily_history = re.findall(r"[-+]?\d*\.\d+|\d+", str(row))
-        if int(daily_history[0]) >= int(from_date) and int(daily_history[0]) <= int(to_date):
-            daily_history[0] = datetime.strptime(daily_history[0], "%Y%m%d")
-            daily_history[1] = float(daily_history[1])
-            daily_history[2] = float(daily_history[2])
-            daily_history[3] = float(daily_history[3])
-            daily_history[4] = float(daily_history[4])
-            daily_history[5] = float(daily_history[5])
-            stock_data.append(daily_history)
+        stock_data = []
+        url = "https://fchart.stock.naver.com/sise.nhn?symbol={}&timeframe=day&count={}&requestType=0".format(code, count)
+        html = requests.get(url).text
+        soup = BeautifulSoup(html, "xml")
+        data = soup.findAll('item')
+        for row in data:
+            daily_history = re.findall(r"[-+]?\d*\.\d+|\d+", str(row))
+            if int(daily_history[0]) >= int(from_date) and int(daily_history[0]) <= int(to_date):
+                daily_history[0] = datetime.strptime(daily_history[0], "%Y%m%d")
+                daily_history[1] = float(daily_history[1])
+                daily_history[2] = float(daily_history[2])
+                daily_history[3] = float(daily_history[3])
+                daily_history[4] = float(daily_history[4])
+                daily_history[5] = float(daily_history[5])
+                stock_data.append(daily_history)
 
-    df = pd.DataFrame(stock_data, columns=['date', 'price', 'high', 'low', 'close', 'vol'])
-    df.set_index(keys='date', inplace=True)
-    return df
+        df = pd.DataFrame(stock_data, columns=['date', 'price', 'high', 'low', 'close', 'vol'])
+        df.set_index(keys='date', inplace=True)
+        return df
+    except Exception:
+        raise Exception(f"Failed to fetch data for stock code {code}")
 
 def buy_stock(money, stock_price, last_stock_num, stock_rate):
     if stock_price == 0:
@@ -74,9 +84,9 @@ def buy_stock_more(money, stock_price, last_stock_num, stock_rate):
     stock_num = money * stock_rate // stock_price
     stock_money = stock_num * stock_price
     if last_stock_num < stock_num:
-        fee = 0.001 # 매수 수수료
+        fee = 0.00015 # 매수 수수료
     else:
-        fee = 0.001 # 매도 수수료
+        fee = 0.0023 # 매도 수수료
     buy_sell_fee = stock_num * stock_price * fee
     while stock_num > 0 and money < (stock_money + buy_sell_fee):
         stock_num -= 1
@@ -135,8 +145,7 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
         stock_ratio.append(sss[2])
 
     if sum(stock_ratio) > 1:
-        print("ERROR!!! sum of ratio is over than 1.0")
-        return
+        raise Exception("Sum of ratios is greater than 1.0")
 
     first_date = 0
     for i in stock_code:
@@ -237,18 +246,13 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
 
     return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total
 
-
-
-
 def calculate_mdd(df):
     df['cumulative_max'] = df['backtest'].cummax()
     df['drawdown'] = df['backtest'] / df['cumulative_max'] - 1
     mdd = df['drawdown'].min()
     return mdd
 
-
-def back_test(stock_info):  
-
+def back_test(stock_info):
     portfolio = stock_info['portfolio']
     start_from_latest_stock = stock_info['start_from_latest_stock']
 
@@ -260,16 +264,11 @@ def back_test(stock_info):
 
     final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total_balance = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
 
-    
-    # MDD 계산
     mdd = calculate_mdd(final_df)
-    
+
     result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return, 'total_balance': total_balance, 'mdd': mdd}
 
-
-    
     return result
 
 if __name__ == '__main__':
     app.run(debug=True)
-

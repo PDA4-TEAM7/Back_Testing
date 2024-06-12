@@ -1,4 +1,4 @@
-#%%
+# %%
 '''
 https://j-smallworld.tistory.com/15
 리밸런싱 백테스트
@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import re
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
+import numpy as np
 
 import matplotlib as rc
 rc.use('TkAgg')
@@ -22,7 +23,6 @@ elif platform.system() == 'Windows': #윈도우
 elif platform.system() == 'Linux': #리눅스
     plt.rcParams['font.family'] = 'Malgun Gothic' 
 plt.rcParams['axes.unicode_minus'] = False #한글 폰트 사용시 마이너스 폰트 깨짐 해결
-
 
 
 # 종목코드별 상장일
@@ -83,7 +83,7 @@ def buy_stock(money, stock_price, last_stock_num, stock_rate):
     총 평가금액을 기준으로 설정 비율대로 리밸런싱 수행
     '''
     if stock_price == 0:
-        return money, 0, 0
+        return money, 0, 0  
 
     stock_num = money * stock_rate // stock_price
     stock_money = stock_num * stock_price
@@ -155,8 +155,39 @@ def get_ratio(names, prices, ratios):
 
     return new_ratios
 
+def get_month_end_data(df):
+    df.index = pd.to_datetime(df.index)  # 인덱스를 DatetimeIndex로 변환
+    return df.resample('ME').last()
 
-def back_test(money: int, interval: int, start_day: str, end_day: str, stock_list, monthly_amount: int, start_from_latest_stock: str):
+def calculate_sharpe_ratio_and_std(df, risk_free_rate=0.01):
+    df.index = pd.to_datetime(df.index)  # 인덱스를 DatetimeIndex로 변환
+    df['monthly_return'] = df['backtest'].pct_change().dropna()  # 월간 수익률 계산 후 결측치 제거
+    
+    # 월간 수익률의 평균 계산
+    mean_monthly_return = df['monthly_return'].mean()
+    
+    # 월간 수익률의 표준편차 계산
+    monthly_std_dev = df['monthly_return'].std()
+    
+    # 누적 수익률 계산
+    cumulative_return = df['backtest'].iloc[-1] / df['backtest'].iloc[0] - 1
+    
+    # 연간 수익률 계산
+    total_period_years = (df.index[-1] - df.index[0]).days / 365.25
+    annual_return = (1 + cumulative_return) ** (1 / total_period_years) - 1
+    
+    # 연간 표준편차로 변환
+    annual_std_dev = monthly_std_dev * np.sqrt(12)
+    
+    # 샤프 비율 계산
+    sharpe_ratio = (annual_return - risk_free_rate) / annual_std_dev
+    
+
+    
+    return round(sharpe_ratio, 2), round(annual_std_dev * 100, 2), round(annual_return, 2)
+
+
+def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str, stock_list, start_from_latest_stock: str):
 
     total_invest_money = money
 
@@ -191,20 +222,23 @@ def back_test(money: int, interval: int, start_day: str, end_day: str, stock_lis
 
     cal_days = (datetime.strptime(end_day, "%Y%m%d") - start_date).days
     
-    # stock_code = ['360750', '133690', '381170', '309230', '381180'] 
-    # stock_name = ['TIGER 미국S&P500', 'TIGER 미국나스닥100', 'TIGER 미국테크TOP10 INDXX', 'KINDEX 미국WideMoat가치주', 'TIGER 미국필라델피아반도체나스닥'] 
-
     df = pd.DataFrame() 
 
     for i in range(len(stock_code)): 
         df_close = get_stock_data(stock_code[i], start_day, end_day)['close']
         df_close = df_close.rename(stock_name[i])  # 열 이름을 종목 이름으로 변경
+        df_close.index = pd.to_datetime(df_close.index)  # 인덱스를 DatetimeIndex로 변환
+        df_close = get_month_end_data(df_close)  # 월말 데이터만 추출
         df = pd.merge(df, df_close, how='outer', left_index=True, right_index=True)
 
 
     df.columns = stock_name
     df.fillna(0, inplace=True)
-    #print(df)
+
+    # 모든 주식이 상장된 이후의 날짜를 기준으로 필터링
+    if start_from_latest_stock == "true":
+        latest_start_date = max(pd.to_datetime([get_stock_origintime(code) for code in stock_code]))
+        df = df[df.index >= latest_start_date]
 
     # 리밸런싱 날짜 리스트 저장
     rebalanceing_date_list = []
@@ -213,14 +247,12 @@ def back_test(money: int, interval: int, start_day: str, end_day: str, stock_lis
         while temp_date not in df.index and temp_date < df.index[-1]:
             temp_date += timedelta(days=1)  # 영업일이 아닐 경우 1일씩 증가.
         rebalanceing_date_list.append(temp_date)
-        start_date += relativedelta(months=1)  # interval 개월씩 증가.
+        start_date += relativedelta(months=interval)  # interval 개월씩 증가.
 
 
-    # backtest_df = pd.DataFrame()  # 백테스트를 위한 데이터프레임
     backtest_index = []
     backtest_data = []
 
-    #{ticker: False for ticker in tickers}
     etf_num = {etf: 0 for etf in stock_name} # 구매한 ETF 개수
     prices = {etf: 0 for etf in stock_name} # 현재가
     etf_money = {etf: 0 for etf in stock_name} # 평가금액
@@ -230,7 +262,7 @@ def back_test(money: int, interval: int, start_day: str, end_day: str, stock_lis
     for each in df.index:
         rebalnace_day = False
         if date_idx < len(rebalanceing_date_list) and each == rebalanceing_date_list[date_idx] and interval > 0:
-            if (date_idx)%interval == 0:
+            if (date_idx) % interval == 0:
                 rebalnace_day = True
             date_idx += 1
 
@@ -239,11 +271,6 @@ def back_test(money: int, interval: int, start_day: str, end_day: str, stock_lis
             # 리밸런싱 하는 달에는 총 금액 대비 비율 계산을 위해 보유 종목 매도 처리
             if rebalnace_day is True:
                 money += etf_num[stock] * prices[stock]
-
-        if date_idx < len(rebalanceing_date_list) and each == rebalanceing_date_list[date_idx] and date_idx > 0:
-            money += monthly_amount
-            # 총 투자금 대비 수익률 계산을 위해 투자금만 별도 관리
-            total_invest_money += monthly_amount
 
         recal_ratio = get_ratio(stock_name, prices, stock_ratio)
 
@@ -269,18 +296,9 @@ def back_test(money: int, interval: int, start_day: str, end_day: str, stock_lis
         total += money
         backtest_index.append(each)
         backtest_data.append(int(total)/total_invest_money)
-        # backtest_df[each] = [int(total)]
 
 
-    # 행열을 바꿈
     backtest_df = pd.DataFrame(backtest_data, index=backtest_index, columns=['backtest'])
-    # backtest_df = backtest_df.transpose()
-    # backtest_df.columns = ['backtest', ]
-
-    # 백테스트 결과 출력
-    print("Total balance : {:>10}".format(str(int(total))))
-    print("Investing Cash: {:>10}".format(str(total_invest_money)))
-    print(backtest_df)
 
     # 최종 데이터 프레임, 3개의 지표와 백테스트 결과
     final_df = pd.concat([df, backtest_df], axis=1)
@@ -292,92 +310,79 @@ def back_test(money: int, interval: int, start_day: str, end_day: str, stock_lis
                 final_df[stock] = final_df[stock] / pr
                 break
 
+    final_df.index = final_df.index.astype(str)
+    final_df_dict = final_df.to_dict()
 
-   #final_df['backtest'] = final_df['backtest'] / total_invest_money
+    # 샤프 비율, 표준편차, 연간 수익률 계산
+    sharpe_ratio, annual_std_dev, annual_return = calculate_sharpe_ratio_and_std(final_df)
 
-    return final_df
+    return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total
 
+def back_test(stock_info):  
+    portfolio = stock_info['portfolio']
+    start_from_latest_stock = stock_info['start_from_latest_stock']
 
+    stock_list = portfolio['stock_list']
+    balance = portfolio['balance']
+    interval = portfolio['interval_month']
+    start_date = portfolio['start_date']
+    end_date = portfolio['end_date']
 
+    # back_test_portfolio 호출 시 인자가 누락된 오류 수정
+    final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total_balance = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
+    
+    result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return, 'total_balance': total_balance}
+    
+    bbox = dict( 
+        boxstyle='square',
+        facecolor='white',
+    )
 
+    plt.rcParams["figure.figsize"] = (8, 4)
+    plt.subplots(constrained_layout=True)
 
-'''
-Main
-'''
+    plt.title("Portfolio (rebalancing interval(month):" + str(interval) + ")")
 
-# test_json = {'stock_list': stock_list, 'balance': balance, 'interval': interval, 'start_date': start_date, 'end_date': end_date}
-# print(test_json)
+    height = final_df['backtest'].iloc[-1]
+    plt.plot(final_df['backtest'].index, final_df['backtest'], label='Backtest (%.2f)' % height)      
 
-stock_file_path = "./StockInfo.json"
-try:
-    with open(stock_file_path, "r", encoding="utf-8") as json_file:
-        stock_info = json.load(json_file)
-        # 테스트할 포트폴리오 개수
-        num_of_portfolio = stock_info['num_of_portfolio']
-        # 가장 최근에 상장한 날짜부터 계산할 지 여부: "true" or "false"
-        # "false" 인 경우에는 가장 처음에 상장한 날짜부터 테스트
-        start_from_latest_stock = stock_info['start_from_latest_stock']
-        portfolio_list = []
-        df_list =[]
+    stock_name = []
+    for sss in stock_list:
+        stock_name.append(sss[1])
 
-        plt.rcParams["figure.figsize"] = (8,4*num_of_portfolio)
-        plt.subplots(constrained_layout=True)
+    for stock in stock_name:
+        height = final_df[stock].iloc[-1]
+        plt.plot(final_df[stock].index, final_df[stock], label=stock + "(%.2f)" % height, linestyle='--', alpha=0.3)
 
-        for i in range(num_of_portfolio):
-            # 테스트 할 포트폴리오 별 셋팅 정보 확인
-            portfolio_list.append(stock_info['portfolio_' + str(i)])
-            p = portfolio_list[i]
-            stock_list = p['stock_list']
-            balance = p['balance']
-            interval = p['interval_month']
-            start_date = p['start_date']
-            end_date = p['end_date']
-            monthly_amount = p['monthly_amount']
+    plt.ylabel("수익률(최종평가액/투자원금)")
+    plt.xlabel("날짜")
+    plt.legend(loc='upper left')
+    plt.grid(True)
 
-            # backtest 수행
-            final_df = back_test(balance, interval, start_date, end_date, stock_list, monthly_amount, start_from_latest_stock)
-        
-            # 그래프 출력
-            bbox = dict( ## 텍스트 박스 스타일 지정
-                boxstyle='square', # 박스 모양
-                facecolor='white', # 박스 배경색
-            )
+    plt.savefig("stock_backtest.png")
 
-            plt.subplot(num_of_portfolio, 1, i + 1)
+    # 결과를 JSON 파일로 저장 (덮어쓰기)
+    with open('result.json', 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=4)
 
-            plt.title("Portfolio " + str(i) + "(rebalancing interval(month):" + str(interval) + ")")
+    return result
 
-            # 백테스팅 결과 표시 (점선)
-            # 백테스팅 수익률(최종평가액/투자원금)은 label에 표시
-            height = final_df['backtest'][-1]
-            plt.plot(final_df['backtest'].index, final_df['backtest'], label='Backtest (%.2f)'%height)      
-            #plt.text(final_df['backtest'].index[-1], height, '%.2f' %height, ha='center', va='bottom', size = 8, bbox = bbox)
+# 클라이언트로부터 JSON 데이터를 받았다고 가정하고 실행
+client_json_data = {
+    "start_from_latest_stock": "false",     #이게 true면 가장 늦게 상장된 걸 기준으로 백테스팅 ,false면 가장 먼저 상장된걸 기준으로 백테스팅
+    "portfolio": {
+        "stock_list": [
+            ["360750", "TIGER 나스닥100", 0.25],
+            ["133690", "TIGER 미국나스닥100", 0.25],
+            ["309230", "KINDEX 미국WideMoat가치주", 0.25],
+            ["381180", "TIGER 미국필라델피아반도체나스닥", 0.25]
+        ],
+        "balance": 1000000,
+        "interval_month": 1,        #리밸런싱할 기간. 1달마다 다시 0.25퍼가 되도록 매수 매도를 진행
+        "start_date": "20100101",
+        "end_date": "20221231"
+    }
+}
 
-            stock_name = []
-            for sss in stock_list:
-                stock_name.append(sss[1])
-
-            # 개별 종목 별 그래프 표시 (실선)
-            for stock in stock_name:
-                height = final_df[stock][-1]
-
-                # 각 종목 별 수익률(최종평가액/투자원금)는 label에 표시
-                plt.plot(final_df[stock].index, final_df[stock], label=stock+"(%.2f)"%height, linestyle='--', alpha=0.3)
-                #plt.text(final_df[stock].index[-1], height, '%.2f' %height, ha='center', va='bottom', size = 6)
-                # height = final_df[stock][-1]
-                # plt.text(final_df[stock].index[-1], height, '%.1f' %height, ha='center', va='bottom', size = 8, bbox = bbox)
-      
-            plt.ylabel("수익률(최종평가액/투자원금)")
-            plt.xlabel("날짜")
-            plt.legend(loc='upper left')
-            
-            plt.grid(True)
-        
-        # 그래프를 stock_backtest.png 이미지 파일로 저장
-        plt.savefig("stock_backtest.png")
-        #plt.show()
-
-except Exception as e:
-    print("Exception:", e)
-
+result = back_test(client_json_data)
 # %%

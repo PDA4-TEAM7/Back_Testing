@@ -114,9 +114,9 @@ def buy_stock_more(money, stock_price, last_stock_num, stock_rate):
     stock_num = money * stock_rate // stock_price
     stock_money = stock_num * stock_price
     if last_stock_num < stock_num:
-        fee = 0.00015 # 매수 수수료
+        fee = 0.001 # 매수 수수료
     else:
-        fee = 0.0023 # 매도 수수료
+        fee = 0.001 # 매도 수수료
     buy_sell_fee = stock_num * stock_price * fee
     while stock_num > 0 and money < (stock_money + buy_sell_fee):
         stock_num -= 1
@@ -335,7 +335,9 @@ def back_test(stock_info):
 
     return result
 
-# 클라이언트로부터 JSON 데이터를 받았다고 가정하고 실행
+# 클라이언트
+
+
 client_json_data = {
     "start_from_latest_stock": "false",     #이게 true면 가장 늦게 상장된 걸 기준으로 백테스팅 ,false면 가장 먼저 상장된걸 기준으로 백테스팅
     "portfolio": {
@@ -348,10 +350,9 @@ client_json_data = {
         "balance": 1000000,
         "interval_month": 1,        #리밸런싱할 기간. 1달마다 다시 0.25퍼가 되도록 매수 매도를 진행
         "start_date": "20140101",
-        "end_date": "20241231"
+        "end_date": "20221231"
     }
 }
 
+
 result = back_test(client_json_data)
-print(result)
-# %%

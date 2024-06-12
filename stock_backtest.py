@@ -74,9 +74,9 @@ def buy_stock_more(money, stock_price, last_stock_num, stock_rate):
     stock_num = money * stock_rate // stock_price
     stock_money = stock_num * stock_price
     if last_stock_num < stock_num:
-        fee = 0.00015 # 매수 수수료
+        fee = 0.001 # 매수 수수료
     else:
-        fee = 0.0023 # 매도 수수료
+        fee = 0.001 # 매도 수수료
     buy_sell_fee = stock_num * stock_price * fee
     while stock_num > 0 and money < (stock_money + buy_sell_fee):
         stock_num -= 1
@@ -237,7 +237,18 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
 
     return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total
 
-def back_test(stock_info):
+
+
+
+def calculate_mdd(df):
+    df['cumulative_max'] = df['backtest'].cummax()
+    df['drawdown'] = df['backtest'] / df['cumulative_max'] - 1
+    mdd = df['drawdown'].min()
+    return mdd
+
+
+def back_test(stock_info):  
+
     portfolio = stock_info['portfolio']
     start_from_latest_stock = stock_info['start_from_latest_stock']
 
@@ -249,9 +260,16 @@ def back_test(stock_info):
 
     final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total_balance = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
 
-    result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return, 'total_balance': total_balance}
+    
+    # MDD 계산
+    mdd = calculate_mdd(final_df)
+    
+    result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return, 'total_balance': total_balance, 'mdd': mdd}
 
+
+    
     return result
 
 if __name__ == '__main__':
     app.run(debug=True)
+

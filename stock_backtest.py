@@ -157,7 +157,7 @@ def get_ratio(names, prices, ratios):
 
 def get_month_end_data(df):
     df.index = pd.to_datetime(df.index)  # 인덱스를 DatetimeIndex로 변환
-    return df.resample('M').last()
+    return df.resample('ME').last()
 
 def calculate_sharpe_ratio_and_std(df, risk_free_rate=0.01):
     df.index = pd.to_datetime(df.index)  # 인덱스를 DatetimeIndex로 변환
@@ -182,10 +182,9 @@ def calculate_sharpe_ratio_and_std(df, risk_free_rate=0.01):
     # 샤프 비율 계산
     sharpe_ratio = (annual_return - risk_free_rate) / annual_std_dev
     
-    # 연간 표준편차를 퍼센트로 변환
-    annual_std_dev_percent = annual_std_dev * 100
+
     
-    return sharpe_ratio, annual_std_dev_percent, annual_return
+    return round(sharpe_ratio, 2), round(annual_std_dev * 100, 2), round(annual_return, 2)
 
 
 def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str, stock_list, start_from_latest_stock: str):
@@ -301,11 +300,6 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
 
     backtest_df = pd.DataFrame(backtest_data, index=backtest_index, columns=['backtest'])
 
-    # 백테스트 결과 출력
-    print("Total balance : {:>10}".format(str(int(total))))
-    print("Investing Cash: {:>10}".format(str(total_invest_money)))
-    print(backtest_df)
-
     # 최종 데이터 프레임, 3개의 지표와 백테스트 결과
     final_df = pd.concat([df, backtest_df], axis=1)
 
@@ -322,12 +316,7 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
     # 샤프 비율, 표준편차, 연간 수익률 계산
     sharpe_ratio, annual_std_dev, annual_return = calculate_sharpe_ratio_and_std(final_df)
 
-    # 결과 출력
-    print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
-    print(f"Standard Deviation: {annual_std_dev:.2f}")
-    print(f"Annual Return: {annual_return:.2%}")
-
-    return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return
+    return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total
 
 def back_test(stock_info):  
     portfolio = stock_info['portfolio']
@@ -340,9 +329,9 @@ def back_test(stock_info):
     end_date = portfolio['end_date']
 
     # back_test_portfolio 호출 시 인자가 누락된 오류 수정
-    final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
+    final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total_balance = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
     
-    result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return}
+    result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return, 'total_balance': total_balance}
     
     bbox = dict( 
         boxstyle='square',
@@ -396,5 +385,4 @@ client_json_data = {
 }
 
 result = back_test(client_json_data)
-print(result)
 # %%

@@ -321,7 +321,6 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
 
 
 def calculate_mdd(df):
-
     df['cumulative_max'] = df['backtest'].cummax()
     df['drawdown'] = df['backtest'] / df['cumulative_max'] - 1
     mdd = df['drawdown'].min()

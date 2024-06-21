@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, abort
+import sys
+import json
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -7,19 +8,8 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import numpy as np
 
-app = Flask(__name__)
-
-@app.route('/backtest', methods=['POST'])
-def backtest():
-    data = request.json
-    try:
-        result = back_test(data)
-        return jsonify(result), 200
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
+#주식 종목 코드(code)에 대해서 최초 상장일(origintime)을 가져옴 , 언제부터 백테스팅 돌릴지 체크
+#네이버 금융 주식 데이터 사용
 def get_stock_origintime(code):
     try:
         url = "https://fchart.stock.naver.com/sise.nhn?symbol={}&timeframe=day&count=1&requestType=0".format(code)
@@ -30,6 +20,8 @@ def get_stock_origintime(code):
     except Exception:
         raise ValueError(f"Stock code {code} not found")
 
+#주식 종목 코드(code), 시작일, 종료일에 대해서 주식 data를 가져옴
+#네이버 금융 주식 데이터 사용
 def get_stock_data(code, from_date, to_date):
     try:
         from_date = str(from_date)
@@ -43,6 +35,7 @@ def get_stock_data(code, from_date, to_date):
         data = soup.findAll('item')
         for row in data:
             daily_history = re.findall(r"[-+]?\d*\.\d+|\d+", str(row))
+            #값이 설정한 기간 내에 존재한 다면
             if int(daily_history[0]) >= int(from_date) and int(daily_history[0]) <= int(to_date):
                 daily_history[0] = datetime.strptime(daily_history[0], "%Y%m%d")
                 daily_history[1] = float(daily_history[1])
@@ -52,12 +45,15 @@ def get_stock_data(code, from_date, to_date):
                 daily_history[5] = float(daily_history[5])
                 stock_data.append(daily_history)
 
+        #pandas 이용을 위해 dataframe객체로 변환
         df = pd.DataFrame(stock_data, columns=['date', 'price', 'high', 'low', 'close', 'vol'])
         df.set_index(keys='date', inplace=True)
         return df
     except Exception:
         raise Exception(f"Failed to fetch data for stock code {code}")
 
+
+#리밸런싱 용 코드. 비율에 맞춰 주식을 매수하거나 매도 처리
 def buy_stock(money, stock_price, last_stock_num, stock_rate):
     if stock_price == 0:
         return money, 0, 0
@@ -65,10 +61,12 @@ def buy_stock(money, stock_price, last_stock_num, stock_rate):
     stock_num = money * stock_rate // stock_price
     stock_money = stock_num * stock_price
     if last_stock_num < stock_num:
-        fee = 0.00015 # 매수 수수료
+        fee = 0.00015 # 매수 수수료, 토스 증권 기준
     else:
-        fee = 0.0023 # 매도 수수료
+        fee = 0.000195 # 매도 수수료, 토스 증권 기준
     buy_sell_fee = abs(last_stock_num - stock_num) * stock_price * fee
+
+    #돈 없으면 주식 갯수 조정
     while stock_num > 0 and money < (stock_money + buy_sell_fee):
         stock_num -= 1
         stock_money = stock_num * stock_price
@@ -77,6 +75,7 @@ def buy_stock(money, stock_price, last_stock_num, stock_rate):
     money -= (stock_money + buy_sell_fee)
     return money, stock_num, stock_money
 
+#보유 자산에 현금 추가 되었을때 (안씀)
 def buy_stock_more(money, stock_price, last_stock_num, stock_rate):
     if stock_price == 0:
         return money, 0, 0
@@ -84,9 +83,9 @@ def buy_stock_more(money, stock_price, last_stock_num, stock_rate):
     stock_num = money * stock_rate // stock_price
     stock_money = stock_num * stock_price
     if last_stock_num < stock_num:
-        fee = 0.00015 # 매수 수수료
+        fee = 0.00015 # 매수 수수료 ,토스 증권 기준
     else:
-        fee = 0.0023 # 매도 수수료
+        fee = 0.00195 # 매도 수수료, 토스 증권 기준
     buy_sell_fee = stock_num * stock_price * fee
     while stock_num > 0 and money < (stock_money + buy_sell_fee):
         stock_num -= 1
@@ -99,6 +98,7 @@ def buy_stock_more(money, stock_price, last_stock_num, stock_rate):
 
     return money, stock_num, stock_money
 
+#주식명,가격,비율을 받아서 가격에 대해 비율을 재 조정
 def get_ratio(names, prices, ratios):
     total_ratio = 0
     new_ratios = []
@@ -114,10 +114,12 @@ def get_ratio(names, prices, ratios):
 
     return new_ratios
 
+#월말 데이터 추출(왜 인지 resample을 'M'말고 'ME'로 잡으라고 나옴)
 def get_month_end_data(df):
     df.index = pd.to_datetime(df.index)
     return df.resample('ME').last()
 
+#df와 무위험 이자율 데이터로 샤프비율,표준편차(std),연간 수익률 계산
 def calculate_sharpe_ratio_and_std(df, risk_free_rate=0.03):
     df.index = pd.to_datetime(df.index)
     df['monthly_return'] = df['backtest'].pct_change().dropna()
@@ -246,6 +248,7 @@ def back_test_portfolio(money: int, interval: int, start_day: str, end_day: str,
 
     return final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total
 
+#최대 낙폭 계산.
 def calculate_mdd(df):
     df['cumulative_max'] = df['backtest'].cummax()
     df['drawdown'] = df['backtest'] / df['cumulative_max'] - 1
@@ -253,17 +256,34 @@ def calculate_mdd(df):
     return mdd
 
 def back_test(stock_info):
+    #포트폴리오 객체
     portfolio = stock_info['portfolio']
+    
+    # 백테스팅 시점 결정
+    # 값이 true일 경우 가장 늦게 상장 된 주식의 상장일 기준으로 백테스팅 시작.
+    # 값이 false일 경우 가장 먼저 상장 된 주식의 상장일 기준으로 백테스팅 시작.
+    # 현재는 false이므로 먼저 상장된 기준으로 백테스팅하고, 그때 당시 안되있으면 반영이 안됨. (값 0 으로 처리)
     start_from_latest_stock = stock_info['start_from_latest_stock']
 
+    #주식 목록 (종목코드,주식이름,포트폴리오 비율)
     stock_list = portfolio['stock_list']
+
+    #초기 투자 총 금액
     balance = portfolio['balance']
+
+    #리밸런싱 단위 (개월) ex) interval=1 은 1달마다 리밸런싱을 함을 의미합니다.
     interval = portfolio['interval_month']
+
+    #백테스팅 시작일자
     start_date = portfolio['start_date']
+    
+    #백테스팅 끝일자
     end_date = portfolio['end_date']
 
+    #백테스트 실행
     final_df, final_df_dict, sharpe_ratio, annual_std_dev, annual_return, total_balance = back_test_portfolio(balance, interval, start_date, end_date, stock_list, start_from_latest_stock)
 
+    #최대 낙폭 계산
     mdd = calculate_mdd(final_df)
 
     result = {'portfolio': final_df_dict, 'sharpe_ratio': sharpe_ratio, 'standard_deviation': annual_std_dev, 'annual_return': annual_return, 'total_balance': total_balance, 'mdd': mdd}
@@ -271,4 +291,14 @@ def back_test(stock_info):
     return result
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    #json값 받아서 data사용
+    input_json = sys.stdin.read()
+    print(f"Received input: {input_json}", file=sys.stderr)  # 로그 추가
+    data = json.loads(input_json)
+    
+    try:
+        result = back_test(data)
+        print(json.dumps(result, ensure_ascii=False))  # ensure_ascii=False 추가
+    except Exception as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        print(f"Exception: {str(e)}", file=sys.stderr)  # 에러 로그 추가
